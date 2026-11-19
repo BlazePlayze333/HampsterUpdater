@@ -1,0 +1,38 @@
+name: Build Hamster Updater
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - '**/*.cs'
+      - '**/*.csproj'
+      - '.github/workflows/build.yml'
+permissions:
+  contents: write
+concurrency:
+  group: updater-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish single EXE
+        shell: pwsh
+        run: |
+          dotnet publish ./HamsterUpdater.csproj -c Release -r win-x64 --self-contained true -o ./publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path ./publish/HamsterUpdater.exe)) { throw 'Published EXE missing' }
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = 'build-${{ github.run_id }}-${{ github.run_attempt }}'
+          gh release create $tag ./publish/HamsterUpdater.exe --target '${{ github.sha }}' --title 'Hamster Updater build ${{ github.run_number }}' --notes 'C# WinForms tray updater. Single self-contained Windows x64 EXE. No PowerShell runtime script required. Build only; no interactive Windows testing performed.' --latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
