@@ -1,26 +1,4 @@
 HAMSTER UPDATER - REAL C# / WINFORMS PROJECT
-Not a PS1 script. Source package, NOT precompiled. No compiler/Windows runtime
-is available in the authoring environment. GitHub or your PC must build it.
-
-IMPORTANT: USE A SEPARATE PROJECT/REPOSITORY
-Create a NEW repository, e.g. HamsterUpdater. Upload the CONTENTS of this ZIP
-to that repo, including .github/workflows/build.yml, and commit to main/master.
-Do NOT overwrite DesktopHamster's Program.cs with this updater's Program.cs.
-Do NOT put these sources in the hamster project tree: default C# globbing can
-compile both entry points. The two apps are separate projects.
-Your existing BlazePlayze333/Hampster repository stays unchanged.
-
-GitHub Actions > Build Hamster Updater builds and publishes HamsterUpdater.exe
-in this NEW repository's Releases. Download that EXE, not Source code ZIP.
-Workflow needs repository policy to allow contents:write. Its default token
-is sufficient; no personal token is embedded. Repository must be controlled
-by you. Keep code free of secrets.
-
-LOCAL BUILD ALTERNATIVE (.NET 10 SDK)
-dotnet publish HamsterUpdater.csproj -c Release -r win-x64 --self-contained true -o ReadyToRun
-A fresh publish folder contains one HamsterUpdater.exe. No .ps1, .bat or
-companion runtime DLLs needed to run it. Native runtime files can be extracted
-into .NET's temporary cache automatically at startup.
 
 RUNNING
 Stop older updaters first. Use Stop-Background-Updates.vbs for the old hidden
