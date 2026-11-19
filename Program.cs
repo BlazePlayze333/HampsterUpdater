@@ -6,7 +6,6 @@ using System.Text;
 using System.Text.Json;
 
 namespace HamsterUpdater;
-
 internal static class Program
 {
     [STAThread] static void Main()
@@ -46,6 +45,7 @@ internal sealed class UpdaterContext : ApplicationContext
     readonly Button check = new() { Text = "Check now", AutoSize = true }, pause = new() { Text = "Pause", AutoSize = true }, exit = new() { Text = "Exit updater", AutoSize = true };
     readonly ContextMenuStrip menu = new();
     readonly NotifyIcon tray;
+    readonly Icon hamsterTrayIcon;
     readonly ToolStripMenuItem menuCheck, menuPause;
     readonly System.Windows.Forms.Timer timer = new() { Interval = 250 };
     readonly HttpClient metadata = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(40) };
@@ -60,6 +60,28 @@ internal sealed class UpdaterContext : ApplicationContext
     string OldStateFile => Path.Combine(folder, ".hamster-csharp-updater-release.json");
     string OldSettingsFile => Path.Combine(folder, ".hamster-csharp-updater-settings.json");
 
+    static Icon LoadTrayIcon()
+    {
+        using var stream = typeof(UpdaterContext).Assembly.GetManifestResourceStream("HamsterUpdater.TrayImage")
+            ?? throw new IOException("The embedded tray image is missing. Add hamster_refresh_app_icon.png as an EmbeddedResource with LogicalName HamsterUpdater.TrayImage in the updater project file, then rebuild.");
+        using var original = new Bitmap(stream);
+        using var resized = new Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(resized))
+        {
+            graphics.Clear(Color.Transparent);
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            float scale = Math.Min(32f / original.Width, 32f / original.Height);
+            float width = original.Width * scale, height = original.Height * scale;
+            graphics.DrawImage(original, (32f - width) / 2f, (32f - height) / 2f, width, height);
+        }
+        IntPtr handle = resized.GetHicon();
+        try
+        {
+            using var temporary = Icon.FromHandle(handle);
+            return (Icon)temporary.Clone();
+        }
+        finally { DestroyIcon(handle); }
+    }
     UpdaterData LoadData(out string? warning)
     {
         warning = null;
@@ -71,11 +93,7 @@ internal sealed class UpdaterContext : ApplicationContext
                 File.SetAttributes(DataFile, File.GetAttributes(DataFile) | FileAttributes.Hidden);
                 return loaded;
             }
-            catch (Exception ex)
-            {
-                warning = "Could not load or hide saved data: " + ex.Message;
-                return new UpdaterData();
-            }
+            catch (Exception ex) { warning = "Could not load or hide saved data: " + ex.Message; return new UpdaterData(); }
         }
         var result = new UpdaterData();
         bool migrated = false;
@@ -84,20 +102,16 @@ internal sealed class UpdaterContext : ApplicationContext
             if (File.Exists(OldSettingsFile))
             {
                 var old = JsonSerializer.Deserialize<Preferences>(File.ReadAllText(OldSettingsFile)) ?? throw new IOException("Empty old settings.");
-                result.Seconds = old.Seconds;
-                migrated = true;
+                result.Seconds = old.Seconds; migrated = true;
             }
             if (File.Exists(OldStateFile))
             {
                 var old = JsonSerializer.Deserialize<ReleaseState>(File.ReadAllText(OldStateFile)) ?? throw new IOException("Empty old release record.");
-                result.Tag = old.Tag;
-                result.Sha256 = old.Sha256;
-                migrated = true;
+                result.Tag = old.Tag; result.Sha256 = old.Sha256; migrated = true;
             }
             if (migrated)
             {
                 WriteData(result);
-                // Remove legacy files only after the combined file has been saved and hidden.
                 if (File.Exists(OldSettingsFile)) File.Delete(OldSettingsFile);
                 if (File.Exists(OldStateFile)) File.Delete(OldStateFile);
             }
@@ -108,26 +122,22 @@ internal sealed class UpdaterContext : ApplicationContext
     void WriteData(UpdaterData value)
     {
         string json = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
-        // OpenOrCreate avoids truncating an existing file through FileMode.Create when it is hidden.
-        using (var stream = new FileStream(DataFile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
-        {
-            File.SetAttributes(DataFile, File.GetAttributes(DataFile) | FileAttributes.Hidden);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-            stream.Write(bytes);
-            stream.SetLength(stream.Position);
-            stream.Flush(true);
-        }
+        using var stream = new FileStream(DataFile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+        File.SetAttributes(DataFile, File.GetAttributes(DataFile) | FileAttributes.Hidden);
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
+        stream.Write(bytes); stream.SetLength(stream.Position); stream.Flush(true);
     }
     void SaveData() { data.Seconds = interval; WriteData(data); }
 
     public UpdaterContext()
     {
+        hamsterTrayIcon = LoadTrayIcon();
+        popup.Icon = hamsterTrayIcon;
         metadata.DefaultRequestHeaders.UserAgent.ParseAdd("DesktopHamster-Updater/1.1");
         download.DefaultRequestHeaders.UserAgent.ParseAdd("DesktopHamster-Updater/1.1");
         data = LoadData(out string? startupWarning);
         if (data.Seconds >= 15 && data.Seconds <= 86400) interval = data.Seconds;
-        seconds.Value = interval;
-        popup.Font = new Font("Segoe UI", 10); popup.AutoScaleMode = AutoScaleMode.Dpi;
+        seconds.Value = interval; popup.Font = new Font("Segoe UI", 10); popup.AutoScaleMode = AutoScaleMode.Dpi;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 1, RowCount = 6 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         foreach (int h in new[] { 30, 50, 32, 43, 43, 50 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
@@ -143,7 +153,7 @@ internal sealed class UpdaterContext : ApplicationContext
         menuCheck = new ToolStripMenuItem("Check now"); menuCheck.Click += async (_, _) => await CheckAsync(); menu.Items.Add(menuCheck);
         menuPause = new ToolStripMenuItem("Pause automatic checks"); menuPause.Click += (_, _) => ToggleAuto(); menu.Items.Add(menuPause);
         menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("Exit updater", null, (_, _) => RequestExit());
-        tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Hamster updater - click for status", ContextMenuStrip = menu, Visible = true };
+        tray = new NotifyIcon { Icon = hamsterTrayIcon, Text = "Hamster updater - click for status", ContextMenuStrip = menu, Visible = true };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowPopup(); };
         check.Click += async (_, _) => await CheckAsync(); pause.Click += (_, _) => ToggleAuto(); exit.Click += (_, _) => RequestExit();
         apply.Click += (_, _) =>
@@ -166,10 +176,7 @@ internal sealed class UpdaterContext : ApplicationContext
             else countdown.Text = "Paused | Last check: " + lastCheck;
         };
         SetStatus(startupWarning ?? $"Automatic checks every {interval} seconds.");
-        if (startupWarning != null)
-        {
-            MessageBox.Show(startupWarning, "Hamster Updater", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
+        if (startupWarning != null) MessageBox.Show(startupWarning, "Hamster Updater", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         timer.Start();
     }
     void ShowPopup()
@@ -277,11 +284,17 @@ internal sealed class UpdaterContext : ApplicationContext
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { exiting = true; timer.Stop(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); popup.Dispose(); metadata.Dispose(); download.Dispose(); }
+        if (disposing)
+        {
+            exiting = true; timer.Stop(); timer.Dispose();
+            tray.Visible = false; tray.Dispose(); menu.Dispose(); popup.Dispose();
+            hamsterTrayIcon.Dispose(); metadata.Dispose(); download.Dispose();
+        }
         base.Dispose(disposing);
     }
     delegate bool WindowCallback(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] static extern bool EnumWindows(WindowCallback callback, IntPtr l);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint id);
     [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint message, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
 }
